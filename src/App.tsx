@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+import AdminDashboard from "./AdminDashboard";
+import AdminLogin from "./AdminLogin";
+import { apiFetch } from "./api";
 
 type Language = "en" | "he";
 type Currency = "ILS" | "USD";
@@ -265,7 +268,7 @@ const content = {
   },
 };
 
-function App() {
+function Storefront() {
   const [language, setLanguage] = useState<Language>("en");
   const [currency, setCurrency] = useState<Currency>("ILS");
   const [selectedCategory, setSelectedCategory] = useState("ALL");
@@ -277,10 +280,20 @@ function App() {
   const [selectedColor, setSelectedColor] = useState("Black");
   const [selectedFont, setSelectedFont] = useState("Classic");
   const [selectedVinylColor, setSelectedVinylColor] = useState("White");
-    const [cart, setCart] = useState<
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+  const [orderConfirmation, setOrderConfirmation] = useState<number | string | null>(null);
+  const [cart, setCart] = useState<
     {
       id: string;
+      productId: number;
       name: string;
+      hebrew: string;
       price: number;
       size: string;
       color: string;
@@ -289,7 +302,18 @@ function App() {
       personalization: string;
       quantity: number;
     }[]
-  >([]);
+  >(() => {
+    try {
+      const savedCart = localStorage.getItem("custom-corner-cart");
+      return savedCart ? JSON.parse(savedCart) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("custom-corner-cart", JSON.stringify(cart));
+  }, [cart]);
   const vinylColorCodes: Record<string, string> = {
   White: "#ffffff",
   Black: "#222222",
@@ -300,21 +324,98 @@ function App() {
   };
 
   const addToCart = () => {
-  if (!selectedProduct) return;
+    if (!selectedProduct) return;
+    setOrderConfirmation(null);
+    setCheckoutError("");
 
-  const newItem = {
-    id: `${Date.now()}-${Math.random()}`,
-    name: selectedProduct.name,
-    price: selectedProduct.price,
-    size: selectedSize,
-    color: selectedColor,
-    font: selectedFont,
-    vinylColor: selectedVinylColor,
-    personalization: personalization.trim(),
-    quantity: 1,
+    const newItem = {
+      id: `${Date.now()}-${Math.random()}`,
+      productId: selectedProduct.id,
+      name: selectedProduct.name,
+      hebrew: selectedProduct.hebrew,
+      price: selectedProduct.price,
+      size: selectedSize,
+      color: selectedColor,
+      font: selectedFont,
+      vinylColor: selectedVinylColor,
+      personalization: personalization.trim(),
+      quantity: 1,
+    };
+
+    setCart((currentCart) => [...currentCart, newItem]);
+    setIsCheckoutOpen(false);
+    setIsCartOpen(true);
   };
 
-  setCart((currentCart) => [...currentCart, newItem]);
+  const updateCartQuantity = (id: string, change: number) => {
+    setCart((currentCart) =>
+      currentCart
+        .map((item) =>
+          item.id === id
+            ? { ...item, quantity: Math.max(1, item.quantity + change) }
+            : item
+        )
+    );
+  };
+
+  const removeFromCart = (id: string) => {
+    setCart((currentCart) => currentCart.filter((item) => item.id !== id));
+  };
+
+  const cartItemCount = cart.reduce((total, item) => total + item.quantity, 0);
+  const cartSubtotal = cart.reduce(
+    (total, item) => total + item.price * item.quantity,
+    0
+  );
+
+  const handleCheckoutSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCheckoutError("");
+
+    if (cart.length === 0) {
+      setCheckoutError(isHebrew ? "הסל ריק." : "Your bag is empty.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const response = await apiFetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName,
+          customerPhone,
+          customerEmail,
+          items: cart,
+          subtotal: cartSubtotal,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to submit your order.");
+      }
+
+      setOrderConfirmation(data.orderId);
+      setCart([]);
+      setCustomerName("");
+      setCustomerPhone("");
+      setCustomerEmail("");
+      setIsCheckoutOpen(false);
+    } catch (error) {
+      console.error("Checkout submission failed:", error);
+      setCheckoutError(
+        isHebrew
+          ? "לא ניתן לשלוח את ההזמנה כרגע. בדקו שהשרת פועל ונסו שוב."
+          : error instanceof Error
+            ? error.message
+            : "Unable to submit your order. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const t = content[language];
@@ -400,9 +501,17 @@ const categories = [
             <option value="USD">$ USD</option>
           </select>
 
-          <a className="cart-link" href="#shop" aria-label="Shopping bag">
-            BAG (0)
-          </a>
+          <button
+            className="cart-link cart-button"
+            type="button"
+            aria-label={isHebrew ? "סל קניות" : "Shopping bag"}
+            onClick={() => {
+              setIsCheckoutOpen(false);
+              setIsCartOpen(true);
+            }}
+          >
+            {isHebrew ? `סל (${cartItemCount})` : `BAG (${cartItemCount})`}
+          </button>
         </div>
       </header>
 
@@ -742,9 +851,209 @@ const categories = [
                     ? "אפשר להשאיר ריק אם אין צורך בהתאמה אישית."
                     : "You can leave this blank if you don't need personalization."}
                 </p>
+
+                <button className="add-to-cart-button" type="button" onClick={addToCart}>
+                  {isHebrew ? "הוספה לסל" : "ADD TO BAG"}
+                </button>
               </div>
             </div>
           </section>
+        )}
+
+        {isCartOpen && (
+          <div className="cart-overlay" onClick={() => setIsCartOpen(false)}>
+            <aside
+              className="cart-drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label={isHebrew ? "סל הקניות שלך" : "Your shopping bag"}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="cart-drawer-heading">
+                <div>
+                  <span className="eyebrow">THE CUSTOM CORNER</span>
+                  <h2>{isHebrew ? "סל הקניות שלך" : "Your Shopping Bag"}</h2>
+                </div>
+                <button
+                  className="cart-close"
+                  type="button"
+                  onClick={() => setIsCartOpen(false)}
+                  aria-label={isHebrew ? "סגירה" : "Close bag"}
+                >
+                  ×
+                </button>
+              </div>
+
+              {cart.length === 0 ? (
+                <div className="cart-empty">
+                  {orderConfirmation !== null ? (
+                    <>
+                      <h3>{isHebrew ? "ההזמנה נשלחה בהצלחה!" : "Your order has been submitted!"}</h3>
+                      <p>
+                        {isHebrew
+                          ? `מספר ההזמנה שלך: ${orderConfirmation}`
+                          : `Your order number is #${orderConfirmation}.`}
+                      </p>
+                      <p>
+                        {isHebrew
+                          ? "ניצור איתך קשר לאישור ההזמנה ותיאום האיסוף."
+                          : "We will contact you to confirm your order and arrange pickup."}
+                      </p>
+                    </>
+                  ) : (
+                    <p>{isHebrew ? "סל הקניות שלך עדיין ריק." : "Your bag is looking a little empty."}</p>
+                  )}
+                  <button type="button" className="add-to-cart-button" onClick={() => setIsCartOpen(false)}>
+                    {isHebrew ? "המשך בקניות" : "CONTINUE SHOPPING"}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="cart-items">
+                    {cart.map((item) => (
+                      <article className="cart-item" key={item.id}>
+                        <div className="cart-item-art">
+                          <span>{item.productId === 1 || item.productId === 2 ? "APPAREL" : item.productId === 3 || item.productId === 4 ? "DRINKWARE" : "GIFT"}</span>
+                        </div>
+                        <div className="cart-item-info">
+                          <h3>{isHebrew ? item.hebrew : item.name}</h3>
+                          <p>{formatPrice(item.price)}</p>
+                          {(item.productId === 1 || item.productId === 2) && (
+                            <p>{isHebrew ? "מידה" : "Size"}: {item.size} · {isHebrew ? "צבע" : "Color"}: {item.color}</p>
+                          )}
+                          {item.productId === 3 && (
+                            <p>{isHebrew ? "צבע" : "Color"}: {item.color}</p>
+                          )}
+                          {(item.productId === 1 || item.productId === 2 || item.productId === 3) && (
+                            <p>{isHebrew ? "גופן" : "Font"}: {item.font} · {isHebrew ? "צבע ויניל" : "Vinyl"}: {item.vinylColor}</p>
+                          )}
+                          {item.personalization && (
+                            <p>{isHebrew ? "כיתוב" : "Text"}: {item.personalization}</p>
+                          )}
+                          <div className="cart-item-actions">
+                            <div className="quantity-control">
+                              <button type="button" onClick={() => updateCartQuantity(item.id, -1)} aria-label="Decrease quantity">−</button>
+                              <span>{item.quantity}</span>
+                              <button type="button" onClick={() => updateCartQuantity(item.id, 1)} aria-label="Increase quantity">+</button>
+                            </div>
+                            <button className="remove-item" type="button" onClick={() => removeFromCart(item.id)}>
+                              {isHebrew ? "הסרה" : "REMOVE"}
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                  {!isCheckoutOpen ? (
+                    <div className="cart-summary">
+                      <div className="cart-subtotal">
+                        <span>{isHebrew ? "סכום ביניים" : "Subtotal"}</span>
+                        <strong>{formatPrice(cartSubtotal)}</strong>
+                      </div>
+                      <p>
+                        {isHebrew
+                          ? "איסוף מהחנות בלבד בשלב זה. פרטי ההזמנה הסופיים יאושרו לאחר יצירת קשר."
+                          : "Store pickup only. Final order details will be confirmed with you."}
+                      </p>
+                      <button
+                        type="button"
+                        className="add-to-cart-button"
+                        onClick={() => setIsCheckoutOpen(true)}
+                      >
+                        {isHebrew ? "המשך לפרטי ההזמנה" : "CONTINUE TO CHECKOUT"}
+                      </button>
+                    </div>
+                  ) : (
+                    <form
+                      className="checkout-form"
+                      onSubmit={handleCheckoutSubmit}
+                    >
+                      <button
+                        type="button"
+                        className="checkout-back"
+                        onClick={() => setIsCheckoutOpen(false)}
+                      >
+                        {isHebrew ? "חזרה לסל" : "← BACK TO BAG"}
+                      </button>
+
+                      <h3>{isHebrew ? "פרטי יצירת קשר" : "Your Contact Details"}</h3>
+                      <p className="checkout-intro">
+                        {isHebrew
+                          ? "מלאו את הפרטים כדי להכין בקשת הזמנה."
+                          : "Enter your details so we can prepare your order request."}
+                      </p>
+
+                      <label htmlFor="checkout-name">
+                        {isHebrew ? "שם מלא" : "Full name"}
+                      </label>
+                      <input
+                        id="checkout-name"
+                        type="text"
+                        value={customerName}
+                        onChange={(event) => setCustomerName(event.target.value)}
+                        autoComplete="name"
+                        required
+                      />
+
+                      <label htmlFor="checkout-phone">
+                        {isHebrew ? "מספר טלפון" : "Phone number"}
+                      </label>
+                      <input
+                        id="checkout-phone"
+                        type="tel"
+                        value={customerPhone}
+                        onChange={(event) => setCustomerPhone(event.target.value)}
+                        autoComplete="tel"
+                        required
+                      />
+
+                      <label htmlFor="checkout-email">
+                        {isHebrew ? "כתובת אימייל" : "Email address"}
+                      </label>
+                      <input
+                        id="checkout-email"
+                        type="email"
+                        value={customerEmail}
+                        onChange={(event) => setCustomerEmail(event.target.value)}
+                        autoComplete="email"
+                        required
+                      />
+
+                      <div className="pickup-notice">
+                        <strong>{isHebrew ? "איסוף מהחנות" : "Store Pickup"}</strong>
+                        <p>
+                          {isHebrew
+                            ? "בשלב זה ניתן לאסוף את ההזמנה מהחנות בלבד. פרטי האיסוף יתואמו לאחר שנאשר את ההזמנה."
+                            : "Orders are pickup-only for now. We will coordinate pickup details after confirming your request."}
+                        </p>
+                      </div>
+
+                      <div className="checkout-total">
+                        <span>{isHebrew ? "סכום ביניים" : "Subtotal"}</span>
+                        <strong>{formatPrice(cartSubtotal)}</strong>
+                      </div>
+
+                      <p className="checkout-email-note">
+                        {isHebrew
+                          ? "ההזמנה תישלח ישירות דרך האתר. ניצור איתך קשר לאישור ותיאום האיסוף."
+                          : "Your order will be submitted directly through the website. We will contact you to confirm pickup details."}
+                      </p>
+
+                      {checkoutError && (
+                        <p className="checkout-error" role="alert">{checkoutError}</p>
+                      )}
+
+                      <button type="submit" className="add-to-cart-button" disabled={isSubmitting}>
+                        {isSubmitting
+                          ? (isHebrew ? "שולחים..." : "SUBMITTING...")
+                          : (isHebrew ? "שליחת הזמנה" : "PLACE ORDER")}
+                      </button>
+                    </form>
+                  )}
+                </>
+              )}
+            </aside>
+          </div>
         )}
 
         <section className="custom-section" id="custom">
@@ -758,7 +1067,7 @@ const categories = [
             <span className="eyebrow">{t.customEyebrow}</span>
             <h2>{t.customTitle}</h2>
             <p>{t.customText}</p>
-            <a href="mailto:hello@example.com" className="primary-button">
+            <a href="mailto:info.thecustomcorner@gmail.com" className="primary-button">
               {t.customButton}
             </a>
           </div>
@@ -789,6 +1098,41 @@ const categories = [
       </footer>
     </div>
   );
+}
+
+function AdminGate() {
+  const [state, setState] = useState<"checking" | "ready" | "error">("checking");
+  const [retryKey, setRetryKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch("/api/auth/me")
+      .then((response) => {
+        if (!active) return;
+        if (response.status === 401) {
+          window.location.replace("/admin/login");
+          return;
+        }
+        setState(response.ok ? "ready" : "error");
+      })
+      .catch(() => { if (active) setState("error"); });
+    return () => { active = false; };
+  }, [retryKey]);
+
+  if (state === "ready") return <AdminDashboard />;
+  if (state === "checking") return <div className="admin-auth-check">Checking administrator session…</div>;
+  return (
+    <div className="admin-auth-check">
+      <div>We couldn’t verify your administrator session. <button type="button" onClick={() => { setState("checking"); setRetryKey((value) => value + 1); }}>Try again</button> <a href="/admin/login">Sign in</a></div>
+    </div>
+  );
+}
+
+function App() {
+  const route = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (route === "/admin/login") return <AdminLogin />;
+  if (route === "/admin") return <AdminGate />;
+  return <Storefront />;
 }
 
 export default App;
